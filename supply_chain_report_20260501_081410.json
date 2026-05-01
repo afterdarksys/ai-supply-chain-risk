@@ -1,0 +1,93 @@
+{
+  "repo_path": ".",
+  "scan_time": "2026-05-01T12:14:10.919924",
+  "maintainer_analysis": {
+    "error": "Not a git repository"
+  },
+  "commit_anomalies": {
+    "error": "Not a git repository"
+  },
+  "dependency_analysis": {
+    "direct_dependencies": 0,
+    "transitive_dependencies": 0,
+    "total_dependencies": 0,
+    "outdated_dependencies": [],
+    "risky_dependencies": []
+  },
+  "hijack_risk": {
+    "typosquatting_risk": "medium",
+    "namespace_confusion_risk": "low",
+    "account_takeover_risk": "low",
+    "overall_hijack_risk": "medium",
+    "mitigation_suggestions": [
+      "Use dependency pinning",
+      "Enable 2FA for package registry accounts",
+      "Monitor for suspicious updates"
+    ]
+  },
+  "blast_radius": {
+    "direct_impact": "high",
+    "transitive_impact": "medium",
+    "downstream_projects_affected": "unknown",
+    "blast_radius_score": 75
+  },
+  "weaponization_indicators": {
+    "indicators_found": 10,
+    "indicators": [
+      {
+        "file": "scanner.py",
+        "type": "obfuscated_code",
+        "pattern": "eval"
+      },
+      {
+        "file": "scanner.py",
+        "type": "obfuscated_code",
+        "pattern": "exec"
+      },
+      {
+        "file": "scanner.py",
+        "type": "obfuscated_code",
+        "pattern": "Function("
+      },
+      {
+        "file": "scanner.py",
+        "type": "network_calls",
+        "pattern": "http://"
+      },
+      {
+        "file": "scanner.py",
+        "type": "network_calls",
+        "pattern": "https://"
+      },
+      {
+        "file": "scanner.py",
+        "type": "network_calls",
+        "pattern": "fetch("
+      },
+      {
+        "file": "scanner.py",
+        "type": "network_calls",
+        "pattern": "XMLHttpRequest"
+      },
+      {
+        "file": "scanner.py",
+        "type": "file_operations",
+        "pattern": "fs.writeFile"
+      },
+      {
+        "file": "scanner.py",
+        "type": "file_operations",
+        "pattern": "os.remove"
+      },
+      {
+        "file": "scanner.py",
+        "type": "file_operations",
+        "pattern": "shutil.rmtree"
+      }
+    ],
+    "weaponization_likelihood": "high"
+  },
+  "overall_risk_score": 22,
+  "severity": "low",
+  "recommendations": []
+}

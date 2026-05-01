@@ -1,0 +1,129 @@
+{
+  "scan_time": "2026-05-01T12:20:17.966504",
+  "assets_scanned": 5,
+  "ndaa_violations": [
+    {
+      "asset_id": "CAM-001",
+      "vendor": "Hikvision",
+      "model": "DS-2CD2143G0-I",
+      "violation": "Vendor is explicitly banned under NDAA Section 889."
+    }
+  ],
+  "geopolitical_risks": [
+    {
+      "asset_id": "FW-001",
+      "component": "Power Supply",
+      "origin": "China",
+      "risk": "Subcomponent manufacturing origin is in a high-risk jurisdiction."
+    },
+    {
+      "asset_id": "CAM-001",
+      "component": "Main Assembly",
+      "origin": "China",
+      "risk": "Manufacturing origin is in a high-risk or sanctioned jurisdiction."
+    },
+    {
+      "asset_id": "CAM-001",
+      "component": "Image Sensor",
+      "origin": "China",
+      "risk": "Subcomponent manufacturing origin is in a high-risk jurisdiction."
+    },
+    {
+      "asset_id": "CAM-001",
+      "component": "Lens Assembly",
+      "origin": "China",
+      "risk": "Subcomponent manufacturing origin is in a high-risk jurisdiction."
+    },
+    {
+      "asset_id": "RTR-001",
+      "component": "Optical Transceiver",
+      "origin": "China",
+      "risk": "Subcomponent manufacturing origin is in a high-risk jurisdiction."
+    },
+    {
+      "asset_id": "BAT-001",
+      "component": "Main Assembly",
+      "origin": "Russia",
+      "risk": "Manufacturing origin is in a high-risk or sanctioned jurisdiction."
+    },
+    {
+      "asset_id": "BAT-001",
+      "component": "Battery Cells",
+      "origin": "Russia",
+      "risk": "Subcomponent manufacturing origin is in a high-risk jurisdiction."
+    }
+  ],
+  "material_risks": [
+    {
+      "asset_id": "FW-001",
+      "component": "Main Processor",
+      "material": "Silicon",
+      "risk_detail": "Geopolitical chokepoint (Taiwan TSMC concentration)"
+    },
+    {
+      "asset_id": "SW-001",
+      "component": "ASIC",
+      "material": "Silicon",
+      "risk_detail": "Geopolitical chokepoint (Taiwan TSMC concentration)"
+    },
+    {
+      "asset_id": "CAM-001",
+      "component": "Image Sensor",
+      "material": "Silicon",
+      "risk_detail": "Geopolitical chokepoint (Taiwan TSMC concentration)"
+    },
+    {
+      "asset_id": "RTR-001",
+      "component": "Optical Transceiver",
+      "material": "Gallium Arsenide",
+      "risk_detail": "Export control risk (China export restrictions)"
+    },
+    {
+      "asset_id": "BAT-001",
+      "component": "Battery Cells",
+      "material": "Lithium",
+      "risk_detail": "High concentration risk (Processing primarily in China)"
+    }
+  ],
+  "vendor_posture": [
+    {
+      "vendor": "Palo Alto Networks",
+      "kev_entries_2023_2024": 5,
+      "patch_cadence": "Very Fast",
+      "posture_score": 85,
+      "source": "Local Heuristics"
+    },
+    {
+      "vendor": "Cisco",
+      "kev_entries_2023_2024": 14,
+      "patch_cadence": "Fast",
+      "posture_score": 70,
+      "source": "Local Heuristics"
+    },
+    {
+      "vendor": "Hikvision",
+      "kev_entries_2023_2024": 0,
+      "patch_cadence": "Unknown",
+      "posture_score": 50,
+      "source": "Unknown"
+    },
+    {
+      "vendor": "Juniper",
+      "kev_entries_2023_2024": 4,
+      "patch_cadence": "Fast",
+      "posture_score": 80,
+      "source": "Local Heuristics"
+    },
+    {
+      "vendor": "GenericPower",
+      "kev_entries_2023_2024": 0,
+      "patch_cadence": "Unknown",
+      "posture_score": 50,
+      "source": "Unknown"
+    }
+  ],
+  "overall_risk_score": 100,
+  "severity": "CRITICAL",
+  "inventory_name": "Core Data Center Assets Q3",
+  "department": "Infrastructure"
+}

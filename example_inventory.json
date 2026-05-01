@@ -1,0 +1,64 @@
+{
+  "inventory_name": "Core Data Center Assets Q3",
+  "department": "Infrastructure",
+  "assets": [
+    {
+      "id": "FW-001",
+      "type": "Firewall",
+      "vendor": "Palo Alto Networks",
+      "model": "PA-5220",
+      "firmware": "10.1.6",
+      "manufacturing_origin": "United States",
+      "components": [
+        {"name": "Main Processor", "origin": "Taiwan", "material": "Silicon"},
+        {"name": "Power Supply", "origin": "China", "material": "Copper"}
+      ]
+    },
+    {
+      "id": "SW-001",
+      "type": "Switch",
+      "vendor": "Cisco",
+      "model": "Catalyst 9300",
+      "firmware": "17.6.3",
+      "manufacturing_origin": "Mexico",
+      "components": [
+        {"name": "ASIC", "origin": "United States", "material": "Silicon"}
+      ]
+    },
+    {
+      "id": "CAM-001",
+      "type": "Surveillance Camera",
+      "vendor": "Hikvision",
+      "model": "DS-2CD2143G0-I",
+      "firmware": "5.6.5",
+      "manufacturing_origin": "China",
+      "components": [
+        {"name": "Image Sensor", "origin": "China", "material": "Silicon"},
+        {"name": "Lens Assembly", "origin": "China", "material": "Glass"}
+      ]
+    },
+    {
+      "id": "RTR-001",
+      "type": "Router",
+      "vendor": "Juniper",
+      "model": "MX204",
+      "firmware": "21.4R3",
+      "manufacturing_origin": "Malaysia",
+      "components": [
+        {"name": "Optical Transceiver", "origin": "China", "material": "Gallium Arsenide"},
+        {"name": "Chassis", "origin": "Taiwan", "material": "Aluminum"}
+      ]
+    },
+    {
+      "id": "BAT-001",
+      "type": "UPS Battery",
+      "vendor": "GenericPower",
+      "model": "10kVA",
+      "firmware": "1.0",
+      "manufacturing_origin": "Russia",
+      "components": [
+        {"name": "Battery Cells", "origin": "Russia", "material": "Lithium"}
+      ]
+    }
+  ]
+}
