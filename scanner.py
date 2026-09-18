@@ -1,422 +1,176 @@
 #!/usr/bin/env python3
-"""
-Enterprise Endpoint SCRM & Vulnerability Scanner
-================================================
-Focuses on Endpoint Software Supply Chain, EOL tracking, 
-and vulnerability mapping.
-"""
-
-import json
-import sys
-import os
-import sqlite3
+"""Dependency-free CycloneDX SBOM integrity scanner."""
 import argparse
-import urllib.request
+import json
+import re
+import sys
 import urllib.error
 import urllib.parse
-from typing import Dict, List, Any
-from datetime import datetime
-import platform
+import urllib.request
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-class DatabaseManager:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.conn = None
+VERSION = "2.0.0"
+SEVERITIES = ("info", "low", "medium", "high", "critical")
+SEVERITY_VALUE = {value: index for index, value in enumerate(SEVERITIES)}
+HASH_LENGTHS = {"SHA-1": 40, "SHA-256": 64, "SHA-384": 96, "SHA-512": 128}
 
-    def connect(self):
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
-
-    def init_db(self):
-        self.connect()
-        cursor = self.conn.cursor()
-        # Schema
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS assets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            hostname TEXT,
-            os_info TEXT,
-            last_scan TIMESTAMP
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS software (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            asset_id INTEGER,
-            name TEXT,
-            version TEXT,
-            publisher TEXT,
-            is_licensed BOOLEAN,
-            install_path TEXT,
-            FOREIGN KEY(asset_id) REFERENCES assets(id)
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS eol_status (
-            software_id INTEGER,
-            is_eol BOOLEAN,
-            eol_date TEXT,
-            latest_version TEXT,
-            FOREIGN KEY(software_id) REFERENCES software(id)
-        )''')
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS vulnerabilities (
-            software_id INTEGER,
-            cve_id TEXT,
-            severity TEXT,
-            description TEXT,
-            FOREIGN KEY(software_id) REFERENCES software(id)
-        )''')
-        self.conn.commit()
-        print(f"[+] Initialized SQLite database at {self.db_path}")
-
-    def vacuum(self):
-        self.connect()
-        self.conn.execute("VACUUM")
-        print(f"[+] Vacuumed database at {self.db_path}")
-
-class ThreatIntelEngine:
-    """Queries EOL and Vuln APIs"""
-    
-    @staticmethod
-    def check_eol(product_name: str) -> Dict[str, Any]:
-        """Check endoflife.date API. We try to guess the product slug."""
-        if not product_name:
-            return {'status': 'unknown'}
-            
-        slug = product_name.lower().replace(' ', '-').replace('.', '')
-        # Only check a few known products to avoid spamming the API in this PoC
-        known_slugs = ['python', 'nodejs', 'go', 'php', 'ruby', 'docker', 'kubernetes', 'ubuntu', 'alpine', 'electron']
-        
-        found_slug = None
-        for k in known_slugs:
-            if k in slug:
-                found_slug = k
-                break
-                
-        if not found_slug:
-            return {'status': 'unknown'}
-
-        api_url = f"https://endoflife.date/api/{found_slug}.json"
-        try:
-            req = urllib.request.Request(api_url, headers={'User-Agent': 'EnterpriseSCRM/1.0'})
-            with urllib.request.urlopen(req, timeout=3) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode())
-                    if data and len(data) > 0:
-                        # Assuming the first entry is the latest cycle
-                        return {
-                            'status': 'success',
-                            # the eol property might be a date string, or boolean
-                            'is_eol': data[0].get('eol', False) != False, 
-                            'eol_date': str(data[0].get('eol', 'Unknown')),
-                            'latest_version': data[0].get('latest', 'Unknown')
-                        }
-        except Exception:
-            pass
-        return {'status': 'error'}
-
-    @staticmethod
-    def check_vulnerabilities(product_name: str) -> List[Dict]:
-        """Mock vulnerability checker"""
-        if not product_name:
-            return []
-        # If the app has "Adobe" or "Flash", mock a vuln
-        if "adobe" in product_name.lower():
-            return [{'cve_id': 'CVE-MOCK-1001', 'severity': 'HIGH', 'description': 'Mocked Adobe Vulnerability'}]
-        return []
-
-class EndpointScanner:
-    """Scans local endpoint for installed software"""
-    
-    LICENSED_PUBLISHERS = ['microsoft', 'adobe', 'autodesk', 'vmware', 'cisco', 'palo alto', 'fortinet', 'apple']
-
-    def __init__(self, db_manager: DatabaseManager):
-        self.db = db_manager
-        self.hostname = platform.node()
-        self.os_info = f"{platform.system()} {platform.release()}"
-
-    def run_scan(self):
-        self.db.connect()
-        cursor = self.db.conn.cursor()
-        
-        # Register asset
-        cursor.execute("INSERT INTO assets (hostname, os_info, last_scan) VALUES (?, ?, ?)",
-                       (self.hostname, self.os_info, datetime.utcnow().isoformat()))
-        asset_id = cursor.lastrowid
-        self.db.conn.commit()
-
-        print(f"[*] Scanning host: {self.hostname} ({self.os_info})")
-        apps = self._scan_os()
-        print(f"[*] Found {len(apps)} installed applications.")
-
-        for app in apps:
-            publisher = app.get('publisher', '') or ''
-            name = app.get('name', '') or ''
-            is_licensed = any(pub in publisher.lower() or pub in name.lower() for pub in self.LICENSED_PUBLISHERS)
-            
-            cursor.execute("INSERT INTO software (asset_id, name, version, publisher, is_licensed, install_path) VALUES (?, ?, ?, ?, ?, ?)",
-                           (asset_id, name, app.get('version'), publisher, is_licensed, app.get('path')))
-            software_id = cursor.lastrowid
-            
-            # EOL Check
-            eol_info = ThreatIntelEngine.check_eol(name)
-            if eol_info.get('status') == 'success':
-                cursor.execute("INSERT INTO eol_status (software_id, is_eol, eol_date, latest_version) VALUES (?, ?, ?, ?)",
-                               (software_id, eol_info.get('is_eol'), eol_info.get('eol_date'), eol_info.get('latest_version')))
-            
-            # Vuln Check
-            vulns = ThreatIntelEngine.check_vulnerabilities(name)
-            for v in vulns:
-                cursor.execute("INSERT INTO vulnerabilities (software_id, cve_id, severity, description) VALUES (?, ?, ?, ?)",
-                               (software_id, v['cve_id'], v['severity'], v['description']))
-                
-        self.db.conn.commit()
-        print(f"[+] Scan complete. Data saved to {self.db.db_path}")
-
-    def _scan_os(self) -> List[Dict]:
-        if sys.platform == 'darwin':
-            return self._scan_macos()
-        elif sys.platform == 'win32':
-            return self._scan_windows()
-        else:
-            print("[-] Unsupported OS for local scanning.")
-            return []
-
-    def _scan_macos(self) -> List[Dict]:
-        import plistlib
-        apps = []
-        app_dirs = ['/Applications', '/System/Applications']
-        for d in app_dirs:
-            if not os.path.exists(d): continue
-            for item in os.listdir(d):
-                if item.endswith('.app'):
-                    app_path = os.path.join(d, item)
-                    plist_path = os.path.join(app_path, 'Contents', 'Info.plist')
-                    if os.path.exists(plist_path):
-                        try:
-                            with open(plist_path, 'rb') as f:
-                                plist = plistlib.load(f)
-                                name = plist.get('CFBundleName', item.replace('.app', ''))
-                                version = plist.get('CFBundleShortVersionString', plist.get('CFBundleVersion', 'Unknown'))
-                                publisher = plist.get('CFBundleIdentifier', '').split('.')[1] if len(plist.get('CFBundleIdentifier', '').split('.')) > 1 else 'Unknown'
-                                apps.append({
-                                    'name': name,
-                                    'version': version,
-                                    'publisher': publisher,
-                                    'path': app_path
-                                })
-                        except Exception:
-                            pass
-        return apps
-
-    def _scan_windows(self) -> List[Dict]:
-        import winreg
-        apps = []
-        try:
-            # Check standard uninstall key
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
-            for i in range(winreg.QueryInfoKey(key)[0]):
-                try:
-                    subkey_name = winreg.EnumKey(key, i)
-                    subkey = winreg.OpenKey(key, subkey_name)
-                    name = winreg.QueryValueEx(subkey, "DisplayName")[0]
-                    version = winreg.QueryValueEx(subkey, "DisplayVersion")[0]
-                    publisher = winreg.QueryValueEx(subkey, "Publisher")[0]
-                    apps.append({'name': name, 'version': version, 'publisher': publisher, 'path': ''})
-                except OSError:
-                    pass
-        except OSError:
-            pass
-        return apps
 
 class SBOMIntegrityAuditor:
-    def __init__(self, sbom_path: str):
-        self.sbom_path = sbom_path
-        self.components = []
-        self.findings = []
-        self.ai_score = 0
-        self.reasons = []
+    """Validate CycloneDX metadata and optionally corroborate package hashes."""
+    def __init__(self, sbom_path: str, offline: bool = False, timeout: float = 5.0):
+        self.sbom_path, self.offline, self.timeout = Path(sbom_path), offline, timeout
+        self.findings: List[Dict[str, Any]] = []
+        self.components: List[Dict[str, Any]] = []
 
-    def audit(self):
-        print(f"[*] Auditing SBOM: {self.sbom_path}")
+    def finding(self, severity: str, code: str, message: str, component: Optional[Dict[str, Any]] = None) -> None:
+        item: Dict[str, Any] = {"severity": severity, "code": code, "message": message}
+        if component:
+            item["component"] = {key: component.get(key, "<unknown>") for key in ("name", "version", "purl")}
+        self.findings.append(item)
+
+    def audit(self) -> Dict[str, Any]:
         try:
-            with open(self.sbom_path, 'r') as f:
-                data = json.load(f)
-        except Exception as e:
-            print(f"[-] Failed to load SBOM: {e}")
-            return
-            
-        self.components = data.get('components', [])
-        print(f"[*] Found {len(self.components)} components.")
-        
-        for comp in self.components:
-            name = comp.get('name')
-            version = comp.get('version')
-            purl = comp.get('purl', '')
-            hashes = comp.get('hashes', [])
-            
-            # Check missing hashes
-            if not hashes:
-                self.ai_score += 10
-                self.reasons.append(f"Missing cryptographic hash for {name}@{version}")
-                
-            if 'pkg:pypi/' in purl:
-                self._verify_pypi(name, version, hashes)
-            elif 'pkg:npm/' in purl:
-                self._verify_npm(name, version, hashes)
+            with self.sbom_path.open(encoding="utf-8") as source:
+                document = json.load(source)
+        except (OSError, json.JSONDecodeError) as exc:
+            self.finding("critical", "SBOM_UNREADABLE", f"Cannot read valid JSON: {exc}")
+            return self.report()
+        if not isinstance(document, dict):
+            self.finding("critical", "SBOM_INVALID", "Top-level SBOM value must be an object")
+            return self.report()
+        if document.get("bomFormat") != "CycloneDX":
+            self.finding("high", "UNEXPECTED_FORMAT", "Expected bomFormat to be CycloneDX")
+        raw_components = document.get("components")
+        if not isinstance(raw_components, list):
+            self.finding("critical", "COMPONENTS_MISSING", "CycloneDX SBOM must contain a components array")
+            return self.report()
+        self.components = [item for item in raw_components if isinstance(item, dict)]
+        for item in raw_components:
+            if not isinstance(item, dict):
+                self.finding("high", "COMPONENT_INVALID", "A component must be an object")
+        identities = [self.identity(item) for item in self.components]
+        for identity, count in Counter(x for x in identities if x).items():
+            if count > 1:
+                self.finding("medium", "DUPLICATE_COMPONENT", f"Component appears {count} times: {identity}")
+        for component in self.components:
+            self.audit_component(component)
+        return self.report()
 
-        self._print_report()
+    @staticmethod
+    def identity(component: Dict[str, Any]) -> str:
+        return str(component.get("purl") or "@".join(str(component.get(k, "")) for k in ("name", "version")))
 
-    def _verify_pypi(self, name: str, version: str, hashes: List[Dict]):
-        api_url = f"https://pypi.org/pypi/{name}/{version}/json"
+    def audit_component(self, component: Dict[str, Any]) -> None:
+        name, version = component.get("name"), component.get("version")
+        if not isinstance(name, str) or not name.strip():
+            self.finding("high", "NAME_MISSING", "Component has no usable name", component)
+        if not isinstance(version, str) or not version.strip():
+            self.finding("high", "VERSION_MISSING", "Component has no usable version", component)
+        ecosystem, package_name, package_version = self.parse_purl(component.get("purl"))
+        if component.get("purl") and not ecosystem:
+            self.finding("medium", "PURL_INVALID", "Package URL is not a supported valid purl", component)
+        if ecosystem and package_version != version:
+            self.finding("medium", "PURL_VERSION_MISMATCH", "purl version differs from component version", component)
+        hashes = component.get("hashes", [])
+        if not isinstance(hashes, list):
+            self.finding("high", "HASHES_INVALID", "hashes must be an array", component)
+            hashes = []
+        if not hashes:
+            self.finding("medium", "HASH_MISSING", "No cryptographic hash is declared", component)
+        self.validate_hashes(component, hashes)
+        if ecosystem and package_name and package_version and not self.offline:
+            self.verify_registry(component, ecosystem, package_name, package_version, hashes)
+
+    @staticmethod
+    def parse_purl(purl: Any) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        if not isinstance(purl, str): return None, None, None
+        match = re.match(r"^pkg:([a-zA-Z0-9.+-]+)/(.+)@([^?#]+)(?:[?#].*)?$", purl)
+        if not match: return None, None, None
+        return match.group(1).lower(), urllib.parse.unquote(match.group(2)), urllib.parse.unquote(match.group(3))
+
+    def validate_hashes(self, component: Dict[str, Any], hashes: Iterable[Any]) -> None:
+        for entry in hashes:
+            if not isinstance(entry, dict):
+                self.finding("high", "HASH_INVALID", "Hash entry must be an object", component); continue
+            algorithm, content = str(entry.get("alg", "")).upper(), str(entry.get("content", ""))
+            length = HASH_LENGTHS.get(algorithm)
+            if length is None:
+                self.finding("medium", "HASH_ALGORITHM_UNKNOWN", f"Unsupported hash algorithm: {algorithm or '<empty>'}", component)
+            elif not re.fullmatch(r"[0-9a-fA-F]+", content) or len(content) != length:
+                self.finding("high", "HASH_MALFORMED", f"{algorithm} hash must be {length} hexadecimal characters", component)
+            elif algorithm == "SHA-1":
+                self.finding("low", "WEAK_HASH", "SHA-1 is weak; include SHA-256 or stronger", component)
+
+    def get_json(self, url: str) -> Optional[Dict[str, Any]]:
+        request = urllib.request.Request(url, headers={"User-Agent": f"sbom-integrity-scanner/{VERSION}", "Accept": "application/json"})
         try:
-            req = urllib.request.Request(api_url, headers={'User-Agent': 'EnterpriseSCRM/1.0'})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode())
-                    urls = data.get('urls', [])
-                    official_sha256 = None
-                    if urls:
-                        official_sha256 = urls[0].get('digests', {}).get('sha256')
-                        
-                    for h in hashes:
-                        if h.get('alg', '').upper() == 'SHA-256':
-                            if official_sha256 and h.get('content') != official_sha256:
-                                self.ai_score += 50
-                                self.reasons.append(f"Hash Mismatch for {name}@{version}: Expected {official_sha256[:8]}..., Got {h.get('content')[:8]}...")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                self.ai_score += 30
-                self.reasons.append(f"Ghost Package/Version: PyPI returned 404 for {name}@{version}")
-        except Exception:
-            pass # Network error
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                data = json.loads(response.read().decode("utf-8")) if response.status == 200 else None
+                return data if isinstance(data, dict) else None
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404: raise LookupError("Registry returned 404") from exc
+            raise ConnectionError(f"Registry returned HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise ConnectionError(str(exc)) from exc
 
-    def _verify_npm(self, name: str, version: str, hashes: List[Dict]):
-        api_url = f"https://registry.npmjs.org/{name}/{version}"
+    def verify_registry(self, component: Dict[str, Any], ecosystem: str, name: str, version: str, hashes: List[Any]) -> None:
         try:
-            req = urllib.request.Request(api_url, headers={'User-Agent': 'EnterpriseSCRM/1.0'})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode())
-                    official_shasum = data.get('dist', {}).get('shasum')
-                    
-                    for h in hashes:
-                        if h.get('alg', '').upper() == 'SHA-1':
-                            if official_shasum and h.get('content') != official_shasum:
-                                self.ai_score += 50
-                                self.reasons.append(f"Hash Mismatch for {name}@{version}: Expected {official_shasum[:8]}..., Got {h.get('content')[:8]}...")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                self.ai_score += 30
-                self.reasons.append(f"Ghost Package/Version: NPM returned 404 for {name}@{version}")
-        except Exception:
-            pass
+            if ecosystem == "pypi":
+                url = "https://pypi.org/pypi/{}/{}/json".format(urllib.parse.quote(name, safe=""), urllib.parse.quote(version, safe=""))
+                data = self.get_json(url) or {}
+                official = {str(item.get("digests", {}).get("sha256", "")).lower() for item in data.get("urls", [])}
+                declared = {str(h.get("content", "")).lower() for h in hashes if isinstance(h, dict) and str(h.get("alg", "")).upper() == "SHA-256"}
+                if declared and official and not declared & official:
+                    self.finding("critical", "REGISTRY_HASH_MISMATCH", "No declared SHA-256 matches any PyPI distribution", component)
+            elif ecosystem == "npm":
+                url = "https://registry.npmjs.org/{}/{}".format(urllib.parse.quote(name, safe="@/"), urllib.parse.quote(version, safe=""))
+                data = self.get_json(url) or {}
+                official = str(data.get("dist", {}).get("shasum", "")).lower()
+                declared = {str(h.get("content", "")).lower() for h in hashes if isinstance(h, dict) and str(h.get("alg", "")).upper() == "SHA-1"}
+                if declared and official and official not in declared:
+                    self.finding("critical", "REGISTRY_HASH_MISMATCH", "Declared SHA-1 does not match npm registry shasum", component)
+        except LookupError as exc:
+            self.finding("high", "REGISTRY_NOT_FOUND", str(exc), component)
+        except ConnectionError as exc:
+            self.finding("info", "REGISTRY_UNAVAILABLE", f"Could not corroborate package: {exc}", component)
 
-    def _print_report(self):
-        probability = min(self.ai_score, 100)
-        print("\n" + "="*70)
-        print("SBOM PROVENANCE & INTEGRITY REPORT")
-        print("="*70)
-        
-        if probability >= 80:
-            print(f"🚨 ALERT: HIGH PROBABILITY OF AI FORGERY ({probability}%)")
-        elif probability >= 40:
-            print(f"⚠️  WARNING: SUSPICIOUS SBOM ANOMALIES DETECTED ({probability}%)")
-        else:
-            print(f"✅ PASSED: Deterministic Provenance Verified ({probability}% anomaly score)")
-            
-        if self.reasons:
-            print("\nFindings:")
-            for r in self.reasons:
-                print(f" - {r}")
-        print("="*70 + "\n")
+    def report(self) -> Dict[str, Any]:
+        counts = {severity: 0 for severity in SEVERITIES}
+        for finding in self.findings: counts[finding["severity"]] += 1
+        maximum = max((x["severity"] for x in self.findings), key=SEVERITY_VALUE.get, default="info")
+        return {"tool": "sbom-integrity-scanner", "version": VERSION, "scanned_at": datetime.now(timezone.utc).isoformat(), "sbom": str(self.sbom_path), "components_scanned": len(self.components), "offline": self.offline, "summary": {"findings": len(self.findings), "by_severity": counts, "max_severity": maximum}, "findings": self.findings}
 
-def report_findings(db_path: str):
-    db = sqlite3.connect(db_path)
-    db.row_factory = sqlite3.Row
-    cursor = db.cursor()
-    
-    print("\n" + "="*70)
-    print("ENDPOINT SUPPLY CHAIN & VULNERABILITY REPORT")
-    print("="*70)
-    
-    cursor.execute("SELECT * FROM software WHERE is_licensed=1 LIMIT 10")
-    licensed = cursor.fetchall()
-    print(f"\n🔑 COMMERCIAL/LICENSED SOFTWARE ({len(licensed)} shown):")
-    for row in licensed:
-        print(f"   - {row['name']} v{row['version']} (Publisher: {row['publisher']})")
 
-    cursor.execute("""
-        SELECT s.name, s.version, e.eol_date, e.latest_version 
-        FROM software s JOIN eol_status e ON s.id = e.software_id 
-        WHERE e.is_eol != 0
-    """)
-    eol_apps = cursor.fetchall()
-    print(f"\n⏰ END-OF-LIFE (EOL) SOFTWARE ({len(eol_apps)}):")
-    if not eol_apps:
-        print("   ✅ No EOL software detected.")
-    for row in eol_apps:
-        print(f"   ⚠️  [EOL] {row['name']} v{row['version']} (EOL Date: {row['eol_date']}, Latest: {row['latest_version']})")
+def render_text(report: Dict[str, Any]) -> str:
+    summary = report["summary"]
+    lines = [f"SBOM integrity scan: {report['sbom']}", f"Components: {report['components_scanned']} | Findings: {summary['findings']} | Maximum severity: {summary['max_severity']}"]
+    for item in report["findings"]:
+        target = item.get("component", {})
+        suffix = f" [{target.get('name')}@{target.get('version')}]" if target else ""
+        lines.append(f"{item['severity'].upper():8} {item['code']}: {item['message']}{suffix}")
+    return "\n".join(lines)
 
-    cursor.execute("""
-        SELECT s.name, v.cve_id, v.severity, v.description 
-        FROM software s JOIN vulnerabilities v ON s.id = v.software_id
-    """)
-    vulns = cursor.fetchall()
-    print(f"\n🛑 KNOWN VULNERABILITIES ({len(vulns)}):")
-    if not vulns:
-        print("   ✅ No vulnerabilities detected in scanned software.")
-    for row in vulns:
-        print(f"   ❌ {row['name']} - {row['cve_id']} ({row['severity']}): {row['description']}")
-    
-    print("\n" + "="*70)
 
-def main():
-    parser = argparse.ArgumentParser(description="Endpoint SCRM & Vulnerability Scanner")
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    # DB command
-    db_parser = subparsers.add_parser("db", help="Database management")
-    db_parser.add_argument("--init", help="Initialize database at path")
-    db_parser.add_argument("--vacuum", help="Vacuum database at path")
-
-    # Scan command
-    scan_parser = subparsers.add_parser("scan", help="Run scanner")
-    scan_parser.add_argument("--local", action="store_true", help="Scan local endpoint applications")
-    scan_parser.add_argument("--db", required=True, help="Path to SQLite database")
-
-    # SBOM Audit command
-    audit_parser = subparsers.add_parser("audit-sbom", help="Audit SBOM for AI forgery or integrity anomalies")
-    audit_parser.add_argument("--file", required=True, help="Path to CycloneDX JSON SBOM")
-
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate CycloneDX SBOM integrity and registry provenance")
+    parser.add_argument("sbom", nargs="?", help="CycloneDX JSON SBOM to scan")
+    parser.add_argument("--offline", action="store_true", help="Do not contact PyPI or npm")
+    parser.add_argument("--timeout", type=float, default=5.0, help="Registry request timeout in seconds")
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--output", help="Write report to this path instead of stdout")
+    parser.add_argument("--fail-on", choices=("none",) + SEVERITIES, default="high")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     args = parser.parse_args()
+    if not args.sbom: parser.print_help(sys.stderr); return 2
+    if args.timeout <= 0: parser.error("--timeout must be positive")
+    report = SBOMIntegrityAuditor(args.sbom, args.offline, args.timeout).audit()
+    payload = json.dumps(report, indent=2, sort_keys=True) if args.format == "json" else render_text(report)
+    if args.output: Path(args.output).write_text(payload + "\n", encoding="utf-8")
+    else: print(payload)
+    return int(args.fail_on != "none" and SEVERITY_VALUE[report["summary"]["max_severity"]] >= SEVERITY_VALUE[args.fail_on])
 
-    if args.command == "db":
-        if args.init:
-            mgr = DatabaseManager(args.init)
-            mgr.init_db()
-        elif args.vacuum:
-            mgr = DatabaseManager(args.vacuum)
-            mgr.vacuum()
-        else:
-            db_parser.print_help()
 
-    elif args.command == "scan":
-        mgr = DatabaseManager(args.db)
-        if not os.path.exists(args.db):
-            print(f"[-] Database {args.db} does not exist. Run 'db --init {args.db}' first.")
-            sys.exit(1)
-            
-        if args.local:
-            scanner = EndpointScanner(mgr)
-            scanner.run_scan()
-            report_findings(args.db)
-
-    elif args.command == "audit-sbom":
-        auditor = SBOMIntegrityAuditor(args.file)
-        auditor.audit()
-
-    else:
-        parser.print_help()
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__": raise SystemExit(main())
